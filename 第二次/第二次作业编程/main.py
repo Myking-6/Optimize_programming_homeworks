@@ -7,11 +7,13 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.optimize import line_search
+from scipy.optimize import fmin_powell, fmin_bfgs, minimize, SR1
 
 n = 4
 m = n
 x0 = np.array([1.2, 1, 1, 1])
+x_t = np.array([1.0, 1.0, 1.0, 1.0])
+ftol = 1e-8
 
 
 def r(x):
@@ -26,6 +28,9 @@ def f(x):
     return np.sum(r(x) ** 2)
 
 
+f_t = f(x_t)
+
+
 def df(x):
     J = np.zeros((m, n))
     for i in range(0, n, 2):
@@ -35,76 +40,39 @@ def df(x):
     return 2 * np.dot(J.T, r(x))
 
 
-class SR1:
-    def __init__(self, n):
-        self.Hk = np.eye(n)
-
-    def update(self, sk, yk):
-        self.Hk = self.Hk + np.linalg.norm(sk - np.dot(self.Hk, yk)) / np.dot((sk - np.dot(self.Hk, yk)).T, yk)
-
-    def dot(self, gk):
-        return np.dot(self.Hk, gk)
+sr1_losses = []
 
 
-class DFP:
-    def __init__(self, n):
-        self.Hk = np.eye(n)
-
-    def update(self, sk, yk):
-        self.Hk = self.Hk - np.linalg.norm(np.dot(self.Hk, yk)) / np.dot(np.dot(yk.T, self.Hk), yk) + np.linalg.norm(
-            sk) / np.dot(yk.T, sk)
-
-    def dot(self, gk):
-        return np.dot(self.Hk, gk)
-
-
-class BFGS:
-    def __init__(self, n):
-        self.Hk = np.eye(n)
-
-    def update(self, sk, yk):
-        pk = 1 / np.dot(sk.T, yk)
-        self.Hk = np.dot(np.dot((np.eye(n) - np.dot(np.dot(pk, yk), sk.T)).T, self.Hk),
-                         np.eye(n) - np.dot(np.dot(pk, yk), sk.T)) + np.dot(np.dot(pk, sk), sk.T)
-
-    def dot(self, gk):
-        return np.dot(self.Hk, gk)
-
-
-def optimize_with_method(method):
-    x = x0
-    results = [(x, f(x))]
-    alpha = 1
-    while True:
-        g = df(x)
-        d = -method.dot(g)
-        alpha_k = line_search(f=f, myfprime=df, xk=x, pk=d, c2=0.9)[0]
-        if alpha_k == None:
-            break
-        elif isinstance(alpha_k, float):
-            alpha = alpha_k
+def getcallback(func, retall):
+    def callback(xk, state=None):
+        loss = np.abs(f_t - func(xk))
+        if loss < ftol:
+            return True
         else:
-            alpha = alpha_k.squeeze()
-        print(alpha, end="")
-        s = alpha * d
-        y = df(x + s) - g
-        method.update(s, y)
-        x = x + s
-        f_value = f(x)
-        print(x, f_value)
-        results.append((x, f_value))
-        if np.linalg.norm(f_value) < 1e-8:
-            break
-    return results
+            if retall:
+                sr1_losses.append(loss)
+            return False
+
+    return callback
 
 
-methods = [SR1, DFP, BFGS]
+minimum = minimize(fun=f, x0=x0, method="trust-constr", hess=SR1(), callback=getcallback(f, True))
+dfp_minimum, dfp_retall = fmin_powell(func=f, x0=x0, retall=True, disp=False, callback=getcallback(f, False))
+dfp_losses = []
+for point in dfp_retall:
+    dfp_losses.append(np.abs(f_t - f(point)))
+bfgs_minimum, bfgs_retall = fmin_bfgs(f=f, x0=x0, retall=True, disp=False, callback=getcallback(f, False))
+bfgs_losses = []
+for point in bfgs_retall:
+    bfgs_losses.append(np.abs(f_t - f(point)))
+
+methods = {'SR1': sr1_losses, 'DFP': dfp_losses, 'BFGS': bfgs_losses}
 
 for method in methods:
-    results_m = optimize_with_method(method(n))
-    print(method.__name__, ':', len(results_m))
-    plt.plot([r[1] for r in results_m], label=method.__name__)
-    plt.legend()
-    plt.xlabel('Iteration')
-    plt.ylabel('Objective value')
-    plt.show()
+    print(method + ':' + str(len(methods[method])))
+    plt.plot([r for r in methods[method]], label=method)
+plt.yscale("log")
+plt.legend()
+plt.xlabel('Iteration')
+plt.ylabel('Objective value')
+plt.show()
